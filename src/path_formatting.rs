@@ -2,10 +2,13 @@
 /// Returns either `.key` format for valid identifiers or `["key"]` format for keys with spaces/special chars.
 pub fn format_path_component(key: &str) -> String {
     // Check if key is a valid identifier (starts with letter/underscore, contains only alphanumeric/underscore)
-    let is_valid_identifier = !key.is_empty() 
-        && (key.chars().next().map_or(false, |c| c.is_alphabetic() || c == '_'))
+    let is_valid_identifier = !key.is_empty()
+        && (key
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_alphabetic() || c == '_'))
         && key.chars().all(|c| c.is_alphanumeric() || c == '_');
-    
+
     if is_valid_identifier {
         format!(".{}", key)
     } else {
@@ -85,8 +88,14 @@ mod tests {
     #[test]
     fn test_build_object_path_nested() {
         assert_eq!(build_object_path("obj.x", "y"), "obj.x.y");
-        assert_eq!(build_object_path("obj[\"my field\"]", "nested"), "obj[\"my field\"].nested");
-        assert_eq!(build_object_path("obj.x", "my field"), "obj.x[\"my field\"]");
+        assert_eq!(
+            build_object_path("obj[\"my field\"]", "nested"),
+            "obj[\"my field\"].nested"
+        );
+        assert_eq!(
+            build_object_path("obj.x", "my field"),
+            "obj.x[\"my field\"]"
+        );
     }
 
     #[test]
@@ -99,7 +108,10 @@ mod tests {
     #[test]
     fn test_build_array_path_nested() {
         assert_eq!(build_array_path("arr[0]", 1), "arr[0][1]");
-        assert_eq!(build_array_path("obj[\"my field\"][0]", 1), "obj[\"my field\"][0][1]");
+        assert_eq!(
+            build_array_path("obj[\"my field\"][0]", 1),
+            "obj[\"my field\"][0][1]"
+        );
     }
 
     #[test]
@@ -107,32 +119,32 @@ mod tests {
         // Simple nested object
         let path1 = build_object_path("obj", "x");
         assert_eq!(path1, "obj.x");
-        
+
         // Object with space in key
         let path2 = build_object_path("obj", "my field");
         assert_eq!(path2, "obj[\"my field\"]");
-        
+
         // Nested: obj.x.y
         let path3 = build_object_path("obj.x", "y");
         assert_eq!(path3, "obj.x.y");
-        
+
         // Nested: obj["my field"].nested
         let path4 = build_object_path("obj[\"my field\"]", "nested");
         assert_eq!(path4, "obj[\"my field\"].nested");
-        
+
         // Array access: arr[0]
         let path5 = build_array_path("arr", 0);
         assert_eq!(path5, "arr[0]");
-        
+
         // Mixed: obj.x[0]
         let path6 = build_array_path("obj.x", 0);
         assert_eq!(path6, "obj.x[0]");
-        
+
         // Complex: obj["my field"][0].nested
         let path7 = build_array_path("obj[\"my field\"]", 0);
         let path8 = build_object_path(&path7, "nested");
         assert_eq!(path8, "obj[\"my field\"][0].nested");
-        
+
         // Complex: obj.x["my field"]
         let path9 = build_object_path("obj.x", "my field");
         assert_eq!(path9, "obj.x[\"my field\"]");
@@ -152,25 +164,34 @@ mod tests {
         //   },
         //   "arr": [{"item": "value7"}]
         // }
-        
+
         let root = "root";
-        
+
         // Test all the object keys
         assert_eq!(build_object_path(root, "simple"), "root.simple");
         assert_eq!(build_object_path(root, "my field"), "root[\"my field\"]");
         assert_eq!(build_object_path(root, "key-name"), "root[\"key-name\"]");
-        assert_eq!(build_object_path(root, "123invalid"), "root[\"123invalid\"]");
+        assert_eq!(
+            build_object_path(root, "123invalid"),
+            "root[\"123invalid\"]"
+        );
         assert_eq!(build_object_path(root, "normal_key"), "root.normal_key");
-        
+
         // Test nested paths
         let nested_base = build_object_path(root, "normal_key");
-        assert_eq!(build_object_path(&nested_base, "nested"), "root.normal_key.nested");
-        assert_eq!(build_object_path(&nested_base, "nested field"), "root.normal_key[\"nested field\"]");
-        
+        assert_eq!(
+            build_object_path(&nested_base, "nested"),
+            "root.normal_key.nested"
+        );
+        assert_eq!(
+            build_object_path(&nested_base, "nested field"),
+            "root.normal_key[\"nested field\"]"
+        );
+
         // Test array paths
         let arr_base = build_object_path(root, "arr");
         assert_eq!(build_array_path(&arr_base, 0), "root.arr[0]");
-        
+
         // Test nested array object
         let item_base = build_array_path(&arr_base, 0);
         assert_eq!(build_object_path(&item_base, "item"), "root.arr[0].item");
