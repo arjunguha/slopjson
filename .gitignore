@@ -1,1 +1,5 @@
 /target
+*.AppImage
+*.AppDir
+appimage/*.AppImage
+appimage/linuxdeploy-plugin-gtk.sh

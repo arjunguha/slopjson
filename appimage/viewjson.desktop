@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=JSON Viewer
+Comment=View and explore JSON files
+Exec=viewjson
+Icon=viewjson
+Terminal=false
+Type=Application
+Categories=Utility;Development;
+MimeType=application/json;
