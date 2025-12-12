@@ -12,15 +12,18 @@
 // 
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
+mod path_formatting;
+
 use gtk::prelude::*;
 use gtk::{
     Application, ApplicationWindow, Paned, ScrolledWindow, TreeView, TreeStore, TreeViewColumn,
     CellRendererText, TextView, TextBuffer, FileChooserDialog, FileChooserAction,
-    ResponseType, Clipboard, Entry, Box as GtkBox, Separator, Orientation,
+    ResponseType, Clipboard, Entry, Box as GtkBox, Separator, Orientation, Image, IconSize,
 };
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use path_formatting::{build_object_path, build_array_path};
 
 fn main() {
     // Read command-line arguments before GTK initialization
@@ -192,7 +195,13 @@ fn build_ui(app: &Application, initial_file: Option<&str>) {
     header_bar.set_show_close_button(true);
     header_bar.set_title(Some("JSON Viewer"));
     
-    let open_button = gtk::Button::with_label("Open File");
+    let open_button = gtk::Button::builder()
+        .label("Open")
+        .tooltip_text("Open a JSON/JSONL file")
+        .build();
+    let open_icon = Image::from_icon_name(Some("document-open"), IconSize::Button);
+    open_button.set_image(Some(&open_icon));
+    open_button.set_always_show_image(true);
     let tree_store_for_open = tree_store.clone();
     let value_text_buffer_for_open = value_text_buffer.clone();
     let window_clone = window.clone();
@@ -230,7 +239,13 @@ fn build_ui(app: &Application, initial_file: Option<&str>) {
     });
     
     // Add clipboard button
-    let clipboard_button = gtk::Button::with_label("From Clipboard");
+    let clipboard_button = gtk::Button::builder()
+        .label("Paste")
+        .tooltip_text("Load JSON from clipboard")
+        .build();
+    let clipboard_icon = Image::from_icon_name(Some("edit-paste"), IconSize::Button);
+    clipboard_button.set_image(Some(&clipboard_icon));
+    clipboard_button.set_always_show_image(true);
     let tree_store_for_clipboard = tree_store.clone();
     let value_text_buffer_for_clipboard = value_text_buffer.clone();
     
@@ -248,8 +263,42 @@ fn build_ui(app: &Application, initial_file: Option<&str>) {
         });
     });
     
+    // Add copy value button
+    let copy_value_button = gtk::Button::builder()
+        .label("Copy")
+        .tooltip_text("Copy selected value to clipboard")
+        .build();
+    let copy_icon = Image::from_icon_name(Some("edit-copy"), IconSize::Button);
+    copy_value_button.set_image(Some(&copy_icon));
+    copy_value_button.set_always_show_image(true);
+    let selection_for_copy = selection.clone();
+    let value_text_buffer_for_copy = value_text_buffer.clone();
+    
+    copy_value_button.connect_clicked(move |_| {
+        let clipboard = Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+        
+        // Get the currently selected value from the text buffer
+        let start_iter = value_text_buffer_for_copy.start_iter();
+        let end_iter = value_text_buffer_for_copy.end_iter();
+        if let Some(value_text) = value_text_buffer_for_copy.text(&start_iter, &end_iter, false) {
+            if !value_text.as_str().is_empty() {
+                clipboard.set_text(value_text.as_str());
+                return;
+            }
+        }
+        
+        // If text buffer is empty, try to get value from selected tree item
+        if let Some((model, iter)) = selection_for_copy.selected() {
+            let full_value = model.value(&iter, 3).get::<String>().unwrap_or_default();
+            if !full_value.is_empty() {
+                clipboard.set_text(&full_value);
+            }
+        }
+    });
+    
     header_bar.pack_start(&open_button);
     header_bar.pack_start(&clipboard_button);
+    header_bar.pack_start(&copy_value_button);
     window.set_titlebar(Some(&header_bar));
     
     window.add(&paned);
@@ -316,7 +365,7 @@ fn load_json_content(content: &str, name: Option<&str>, tree_store: &TreeStore, 
             
             for (idx, value) in json_values.iter().enumerate() {
                 let line_iter = tree_store.append(Some(&root_iter));
-                let path = format!("{}[{}]", root_path, idx);
+                let path = build_array_path(&root_path, idx);
                 tree_store.set_value(&line_iter, 0, &format!("Line {}", idx + 1).to_value());
                 tree_store.set_value(&line_iter, 1, &format_value_preview(value).to_value());
                 tree_store.set_value(&line_iter, 2, &path.to_value());
@@ -349,7 +398,7 @@ fn populate_tree(tree_store: &TreeStore, parent: &gtk::TreeIter, value: &Value, 
         Value::Object(map) => {
             for (key, val) in map.iter() {
                 let iter = tree_store.append(Some(parent));
-                let new_path = format!("{}.{}", path, key);
+                let new_path = build_object_path(path, key);
                 tree_store.set_value(&iter, 0, &key.to_value());
                 tree_store.set_value(&iter, 1, &format_value_preview(val).to_value());
                 tree_store.set_value(&iter, 2, &new_path.to_value());
@@ -360,7 +409,7 @@ fn populate_tree(tree_store: &TreeStore, parent: &gtk::TreeIter, value: &Value, 
         Value::Array(arr) => {
             for (idx, val) in arr.iter().enumerate() {
                 let iter = tree_store.append(Some(parent));
-                let new_path = format!("{}[{}]", path, idx);
+                let new_path = build_array_path(path, idx);
                 tree_store.set_value(&iter, 0, &format!("[{}]", idx).to_value());
                 tree_store.set_value(&iter, 1, &format_value_preview(val).to_value());
                 tree_store.set_value(&iter, 2, &new_path.to_value());
