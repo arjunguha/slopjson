@@ -25,9 +25,10 @@ jobs:
             libgdk-pixbuf2.0-dev \
             libpango1.0-dev \
             libatk1.0-dev \
-            libcairo-gobject2 \
+            libcairo2-dev \
             libglib2.0-dev \
-            pkg-config
+            pkg-config \
+            build-essential
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
