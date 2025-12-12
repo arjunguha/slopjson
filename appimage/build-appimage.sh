@@ -48,13 +48,23 @@ exec "${HERE}/usr/bin/viewjson" "$@"
 APPRUN_EOF
 chmod +x "$APPDIR/AppRun"
 
-# Create a simple icon (if needed)
-if [ ! -f "$APPDIR/viewjson.png" ]; then
-    echo -e "${YELLOW}Creating placeholder icon...${NC}"
-    # Create a simple 256x256 PNG icon using ImageMagick if available, otherwise skip
-    if command -v convert &> /dev/null; then
-        convert -size 256x256 xc:blue -pointsize 72 -fill white -gravity center -annotate +0+0 "JSON" "$APPDIR/viewjson.png" 2>/dev/null || true
+# Create and install icon
+echo -e "${YELLOW}Creating icon...${NC}"
+ICON_PATH="$APPDIR/usr/share/icons/hicolor/256x256/apps/viewjson.png"
+ICON_CREATED=false
+
+if command -v convert &> /dev/null; then
+    if convert -size 256x256 xc:blue -pointsize 72 -fill white -gravity center -annotate +0+0 "JSON" "$ICON_PATH" 2>/dev/null; then
+        ICON_CREATED=true
+        cp "$ICON_PATH" "$APPDIR/viewjson.png"
     fi
+fi
+
+# If icon creation failed, remove Icon line from desktop file to avoid errors
+if [ "$ICON_CREATED" = false ]; then
+    echo -e "${YELLOW}Warning: Could not create icon, removing Icon entry from desktop file...${NC}"
+    sed -i '/^Icon=/d' "$APPDIR/viewjson.desktop"
+    sed -i '/^Icon=/d' "$APPDIR/usr/share/applications/viewjson.desktop"
 fi
 
 # Download linuxdeploy if not present
@@ -84,10 +94,17 @@ fi
 # Run linuxdeploy to bundle dependencies
 echo -e "${YELLOW}Bundling dependencies with linuxdeploy...${NC}"
 export LINUXDEPLOY="$LINUXDEPLOY"
+# Use --icon-file if icon exists
+ICON_ARG=""
+if [ -f "$APPDIR/usr/share/icons/hicolor/256x256/apps/viewjson.png" ]; then
+    ICON_ARG="--icon-file=$APPDIR/usr/share/icons/hicolor/256x256/apps/viewjson.png"
+fi
+
 "$LINUXDEPLOY" \
     --appdir "$APPDIR" \
     --executable "$APPDIR/usr/bin/viewjson" \
     --desktop-file "$APPDIR/viewjson.desktop" \
+    $ICON_ARG \
     --plugin gtk \
     --output appimage || {
     echo -e "${RED}linuxdeploy failed, trying manual bundling...${NC}"
@@ -96,6 +113,7 @@ export LINUXDEPLOY="$LINUXDEPLOY"
         --appdir "$APPDIR" \
         --executable "$APPDIR/usr/bin/viewjson" \
         --desktop-file "$APPDIR/viewjson.desktop" \
+        $ICON_ARG \
         --output appimage || true
 }
 
