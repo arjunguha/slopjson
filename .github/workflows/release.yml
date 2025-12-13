@@ -9,6 +9,8 @@ jobs:
   build-appimage:
     name: Build AppImage
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout code
