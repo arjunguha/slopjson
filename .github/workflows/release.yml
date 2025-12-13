@@ -13,6 +13,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       
       - name: Install system dependencies
         run: |
@@ -54,9 +57,23 @@ jobs:
           chmod +x appimage/build-appimage.sh
           ./appimage/build-appimage.sh
       
-      - name: Upload AppImage artifact
-        uses: actions/upload-artifact@v4
+      - name: Get release notes from tag commit
+        id: release_notes
+        run: |
+          # Get the commit message from the tag
+          TAG_COMMIT=$(git rev-list -n 1 ${{ github.ref_name }})
+          NOTES=$(git log -1 --pretty=%B $TAG_COMMIT)
+          
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
         with:
-          name: viewjson-${{ github.ref_name }}-x86_64.AppImage
-          path: viewjson-x86_64.AppImage
-          retention-days: 90
+          files: viewjson-x86_64.AppImage
+          name: Release ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body: ${{ steps.release_notes.outputs.body }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
