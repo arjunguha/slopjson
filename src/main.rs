@@ -455,8 +455,11 @@ fn add_jsonl_to_tree(
 /// Adds a single JSON value to the tree store
 fn add_single_value_to_tree(tree_store: &TreeStore, value: &Value, root_name: &str) {
     let root_iter = tree_store.append(None);
-    set_tree_node_values(tree_store, &root_iter, root_name, value, root_name);
-    populate_tree(tree_store, &root_iter, value, root_name);
+    // Use "$" as the root path for single objects/arrays (JSONPath notation)
+    // This ensures proper path generation for nested structures
+    let root_path = "$";
+    set_tree_node_values(tree_store, &root_iter, root_name, value, root_path);
+    populate_tree(tree_store, &root_iter, value, root_path);
 }
 
 /// Loads parsed content into the tree store
