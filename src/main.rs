@@ -14,16 +14,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 mod json_reader;
 mod path_formatting;
+mod search;
 
 use gtk::prelude::*;
 use gtk::{
-    Application, ApplicationWindow, Box as GtkBox, CellRendererText, Clipboard, Entry,
-    FileChooserAction, FileChooserDialog, Menu, MenuBar, MenuItem, Orientation, Paned,
-    ResponseType, ScrolledWindow, Separator, TextBuffer, TextView, TreeStore, TreeView,
+    Application, ApplicationWindow, Box as GtkBox, Button, CellRendererText, CheckButton,
+    Clipboard, Entry, FileChooserAction, FileChooserDialog, Menu, MenuBar, MenuItem, Orientation,
+    Paned, ResponseType, ScrolledWindow, Separator, TextBuffer, TextView, TreeStore, TreeView,
     TreeViewColumn,
 };
 use json_reader::{parse_file, parse_text_content, ParseResult};
 use path_formatting::{build_array_path, build_object_path};
+use search::{find_all_occurrences, find_occurrence_to_highlight};
 use serde_json::Value;
 use std::path::Path;
 
@@ -443,17 +445,678 @@ fn build_ui(app: &Application, initial_files: &[String]) {
         }
     });
 
+    // Find menu item
+    let find_menu_item = MenuItem::with_label("Find");
+    gtk::prelude::GtkMenuItemExt::set_accel_path(&find_menu_item, Some("<Primary>f"));
+
     edit_menu.append(&paste_menu_item);
     edit_menu.append(&copy_menu_item);
     edit_menu.append(&remove_file_menu_item);
+    edit_menu.append(&find_menu_item);
 
     // Add menus to menu bar
     menu_bar.append(&file_menu_item);
     menu_bar.append(&edit_menu_item);
 
-    // Create main container with menu bar and paned
+    // Create search toolbar (initially hidden)
+    let search_toolbar = GtkBox::new(Orientation::Horizontal, 6);
+    search_toolbar.set_margin_start(6);
+    search_toolbar.set_margin_end(6);
+    search_toolbar.set_margin_top(3);
+    search_toolbar.set_margin_bottom(3);
+    search_toolbar.set_visible(false);
+    search_toolbar.set_no_show_all(true);
+
+    let search_label = gtk::Label::new(Some("Find:"));
+    search_toolbar.pack_start(&search_label, false, false, 0);
+
+    let search_entry = Entry::new();
+    search_entry.set_placeholder_text(Some("Search keys and values..."));
+    search_entry.set_hexpand(true);
+    search_toolbar.pack_start(&search_entry, true, true, 0);
+
+    let case_sensitive_check = CheckButton::with_label("Case sensitive");
+    search_toolbar.pack_start(&case_sensitive_check, false, false, 0);
+
+    let prev_button = Button::with_label("Previous");
+    search_toolbar.pack_start(&prev_button, false, false, 0);
+
+    let next_button = Button::with_label("Next");
+    search_toolbar.pack_start(&next_button, false, false, 0);
+
+    let close_search_button = Button::with_label("Close");
+    search_toolbar.pack_start(&close_search_button, false, false, 0);
+
+    // Match information: tree path and character position within the value
+    #[derive(Clone)]
+    struct SearchMatch {
+        path: gtk::TreePath,
+        is_key_match: bool,
+    }
+
+    // Search state: store all matching occurrences and current index
+    let search_matches: std::rc::Rc<std::cell::RefCell<Vec<SearchMatch>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let search_current_index: std::rc::Rc<std::cell::RefCell<Option<usize>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let current_search_text: std::rc::Rc<std::cell::RefCell<String>> =
+        std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+    let current_case_sensitive: std::rc::Rc<std::cell::RefCell<bool>> =
+        std::rc::Rc::new(std::cell::RefCell::new(false));
+
+    // Function to perform search
+    let perform_search =
+        |tree_store: &TreeStore,
+         search_text: &str,
+         case_sensitive: bool,
+         search_matches: &std::rc::Rc<std::cell::RefCell<Vec<SearchMatch>>>,
+         search_current_index: &std::rc::Rc<std::cell::RefCell<Option<usize>>>| {
+            let mut matches = Vec::new();
+            let search_text_lower = if case_sensitive {
+                search_text.to_string()
+            } else {
+                search_text.to_lowercase()
+            };
+
+            // Recursively search through tree - only search leaf nodes
+            fn search_tree(
+                tree_store: &TreeStore,
+                iter: &gtk::TreeIter,
+                search_text: &str,
+                search_text_lower: &str,
+                case_sensitive: bool,
+                matches: &mut Vec<SearchMatch>,
+            ) {
+                // Check if this node has children
+                let has_children = tree_store.iter_children(Some(iter)).is_some();
+
+                // Only search leaf nodes (nodes with no children)
+                if !has_children {
+                    if let Some(path) = tree_store.path(iter) {
+                        // Get key (column 0) and value (columns 1 and 3)
+                        let key = tree_store
+                            .value(iter, 0)
+                            .get::<String>()
+                            .unwrap_or_default();
+                        let value_preview = tree_store
+                            .value(iter, 1)
+                            .get::<String>()
+                            .unwrap_or_default();
+                        let full_value = tree_store
+                            .value(iter, 3)
+                            .get::<String>()
+                            .unwrap_or_default();
+
+                        // Find all occurrences in the key
+                        let key_occurrences =
+                            find_all_occurrences(&key, search_text, case_sensitive);
+                        for (_start, _end) in key_occurrences {
+                            matches.push(SearchMatch {
+                                path: path.clone(),
+                                is_key_match: true,
+                            });
+                        }
+
+                        // Find all occurrences in the value
+                        // We need to format it the same way as we display it, so offsets match
+                        let value_to_search = if !full_value.is_empty() {
+                            // Format the value the same way as we display it
+                            match serde_json::from_str::<Value>(&full_value) {
+                                Ok(v) => format_value_literal(&v),
+                                Err(_) => full_value.clone(),
+                            }
+                        } else {
+                            value_preview.clone()
+                        };
+                        let value_occurrences =
+                            find_all_occurrences(&value_to_search, search_text, case_sensitive);
+                        for (_start, _end) in value_occurrences {
+                            matches.push(SearchMatch {
+                                path: path.clone(),
+                                is_key_match: false,
+                            });
+                        }
+                    }
+                } else {
+                    // This node has children, so recursively search children
+                    if let Some(mut child_iter) = tree_store.iter_children(Some(iter)) {
+                        loop {
+                            search_tree(
+                                tree_store,
+                                &child_iter,
+                                search_text,
+                                search_text_lower,
+                                case_sensitive,
+                                matches,
+                            );
+                            if !tree_store.iter_next(&mut child_iter) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Search from each root node
+            if let Some(mut root_iter) = tree_store.iter_first() {
+                loop {
+                    search_tree(
+                        tree_store,
+                        &root_iter,
+                        search_text,
+                        &search_text_lower,
+                        case_sensitive,
+                        &mut matches,
+                    );
+                    if !tree_store.iter_next(&mut root_iter) {
+                        break;
+                    }
+                }
+            }
+
+            let is_empty = matches.is_empty();
+            *search_matches.borrow_mut() = matches;
+            *search_current_index.borrow_mut() = if is_empty { None } else { Some(0) };
+        };
+
+    // Function to navigate to search result and highlight the occurrence
+    let navigate_to_match = |tree_view: &TreeView,
+                             selection: &gtk::TreeSelection,
+                             tree_store: &TreeStore,
+                             value_text_buffer: &TextBuffer,
+                             value_text_view: &TextView,
+                             matches: &[SearchMatch],
+                             index: Option<usize>,
+                             search_text: &str,
+                             case_sensitive: bool| {
+        if let Some(idx) = index {
+            if idx < matches.len() {
+                let search_match = &matches[idx];
+                let path = &search_match.path;
+
+                // Expand all parent nodes to show the path to the leaf
+                // We need to expand from root to leaf, so we'll go up from the leaf
+                // and expand each parent path
+                let mut parent_path = path.clone();
+                let mut paths_to_expand = Vec::new();
+
+                // Collect all parent paths (from root to leaf)
+                while parent_path.up() {
+                    paths_to_expand.push(parent_path.clone());
+                }
+
+                // Expand from root to leaf (reverse order)
+                for expand_path in paths_to_expand.iter().rev() {
+                    tree_view.expand_row(expand_path, false);
+                }
+
+                // Select the tree node (leaf)
+                selection.select_path(path);
+                tree_view.scroll_to_cell(Some(path), None::<&TreeViewColumn>, false, 0.0, 0.0);
+
+                // Get the iter for the selected path to get the value
+                if let Some(iter) = tree_store.iter(path) {
+                    let full_value = tree_store
+                        .value(&iter, 3)
+                        .get::<String>()
+                        .unwrap_or_default();
+
+                    // Format the JSON value nicely - must match the formatting used during search
+                    let formatted_value = if !full_value.is_empty() {
+                        match serde_json::from_str::<Value>(&full_value) {
+                            Ok(v) => format_value_literal(&v),
+                            Err(_) => full_value.clone(),
+                        }
+                    } else {
+                        tree_store
+                            .value(&iter, 1)
+                            .get::<String>()
+                            .unwrap_or_default()
+                    };
+
+                    // Set the text in the buffer
+                    value_text_buffer.set_text(&formatted_value);
+
+                    // Highlight the occurrence if it's a value match
+                    if !search_match.is_key_match {
+                        // Create or get the highlight tag
+                        let tag_table = value_text_buffer.tag_table();
+                        if let Some(ref table) = tag_table {
+                            let highlight_tag = if let Some(tag) = table.lookup("search-highlight")
+                            {
+                                tag
+                            } else {
+                                let tag = gtk::TextTag::new(Some("search-highlight"));
+                                tag.set_property("background", &"yellow");
+                                tag.set_property("foreground", &"black");
+                                table.add(&tag);
+                                tag
+                            };
+
+                            // Remove any existing highlights
+                            let mut start_iter = value_text_buffer.start_iter();
+                            let mut end_iter = value_text_buffer.end_iter();
+                            value_text_buffer.remove_tag(
+                                &highlight_tag,
+                                &mut start_iter,
+                                &mut end_iter,
+                            );
+
+                            // Build list of matches for this same path (for use with find_occurrence_to_highlight)
+                            // This contains all matches (both key and value) for the current path, in order
+                            let mut path_matches: Vec<(usize, bool)> = Vec::new();
+                            for (i, m) in matches.iter().enumerate() {
+                                if m.path == *path {
+                                    path_matches.push((i, m.is_key_match));
+                                }
+                            }
+
+                            // Find which occurrence to highlight using the abstracted function
+                            // This will find the correct occurrence within the formatted_value
+                            // Only proceed if the current match is in path_matches
+                            if path_matches
+                                .iter()
+                                .any(|(global_idx, _)| *global_idx == idx)
+                            {
+                                if let Some((start, end)) = find_occurrence_to_highlight(
+                                    &path_matches,
+                                    idx,
+                                    &formatted_value,
+                                    search_text,
+                                    case_sensitive,
+                                ) {
+                                    // `start`/`end` are character offsets (not bytes). GTK expects character offsets.
+                                    let formatted_chars = formatted_value.chars().count();
+
+                                    // Verify the positions are valid (in character offsets)
+                                    if start <= formatted_chars
+                                        && end <= formatted_chars
+                                        && start < end
+                                    {
+                                        let mut start_iter =
+                                            value_text_buffer.iter_at_offset(start as i32);
+                                        let mut end_iter =
+                                            value_text_buffer.iter_at_offset(end as i32);
+                                        value_text_buffer.apply_tag(
+                                            &highlight_tag,
+                                            &mut start_iter,
+                                            &mut end_iter,
+                                        );
+
+                                        // Create a mark at the start position and scroll to it
+                                        // This is more reliable than scroll_to_iter
+                                        if let Some(mark) = value_text_buffer.create_mark(
+                                            Some("search-scroll-mark"),
+                                            &mut start_iter,
+                                            true, // left_gravity
+                                        ) {
+                                            // Scroll to make the mark visible using idle to ensure it happens after layout
+                                            let value_text_view_clone = value_text_view.clone();
+                                            let mark_clone = mark.clone();
+                                            let value_text_buffer_clone = value_text_buffer.clone();
+                                            glib::idle_add_local(move || {
+                                                value_text_view_clone
+                                                    .scroll_mark_onscreen(&mark_clone);
+                                                // Clean up the mark after scrolling
+                                                if let Some(mark) = value_text_buffer_clone
+                                                    .mark(&"search-scroll-mark")
+                                                {
+                                                    value_text_buffer_clone.delete_mark(&mark);
+                                                }
+                                                glib::ControlFlow::Break
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    // Connect search entry changes
+    let tree_store_for_search = tree_store.clone();
+    let tree_view_for_search = tree_view.clone();
+    let selection_for_search = selection.clone();
+    let value_text_buffer_for_search = value_text_buffer.clone();
+    let value_text_view_for_search = value_text_view.clone();
+    let search_matches_clone = search_matches.clone();
+    let search_current_index_clone = search_current_index.clone();
+    let current_search_text_clone = current_search_text.clone();
+    let current_case_sensitive_clone = current_case_sensitive.clone();
+    let case_sensitive_check_clone = case_sensitive_check.clone();
+    let prev_button_clone = prev_button.clone();
+    let next_button_clone = next_button.clone();
+
+    search_entry.connect_changed({
+        let tree_store_clone = tree_store_for_search.clone();
+        let tree_view_clone = tree_view_for_search.clone();
+        let selection_clone = selection_for_search.clone();
+        let value_text_buffer_clone = value_text_buffer_for_search.clone();
+        let value_text_view_clone = value_text_view_for_search.clone();
+        let search_matches_clone2 = search_matches_clone.clone();
+        let search_current_index_clone2 = search_current_index_clone.clone();
+        let current_search_text_clone2 = current_search_text_clone.clone();
+        let current_case_sensitive_clone2 = current_case_sensitive_clone.clone();
+        let case_sensitive_check_clone2 = case_sensitive_check_clone.clone();
+        let prev_button_clone2 = prev_button_clone.clone();
+        let next_button_clone2 = next_button_clone.clone();
+        move |entry| {
+            let search_text = entry.text().to_string();
+            if search_text.is_empty() {
+                *search_matches_clone2.borrow_mut() = Vec::new();
+                *search_current_index_clone2.borrow_mut() = None;
+                prev_button_clone2.set_sensitive(false);
+                next_button_clone2.set_sensitive(false);
+                return;
+            }
+
+            let case_sensitive = case_sensitive_check_clone2.is_active();
+            *current_search_text_clone2.borrow_mut() = search_text.clone();
+            *current_case_sensitive_clone2.borrow_mut() = case_sensitive;
+
+            perform_search(
+                &tree_store_clone,
+                &search_text,
+                case_sensitive,
+                &search_matches_clone2,
+                &search_current_index_clone2,
+            );
+
+            let matches = search_matches_clone2.borrow();
+            let has_matches = !matches.is_empty();
+            prev_button_clone2.set_sensitive(has_matches);
+            next_button_clone2.set_sensitive(has_matches);
+
+            if has_matches {
+                let current_idx = search_current_index_clone2.borrow();
+                navigate_to_match(
+                    &tree_view_clone,
+                    &selection_clone,
+                    &tree_store_clone,
+                    &value_text_buffer_clone,
+                    &value_text_view_clone,
+                    &matches,
+                    *current_idx,
+                    &search_text,
+                    case_sensitive,
+                );
+            }
+        }
+    });
+
+    // Connect case sensitivity checkbox
+    let tree_store_for_case = tree_store_for_search.clone();
+    let tree_view_for_case = tree_view_for_search.clone();
+    let selection_for_case = selection_for_search.clone();
+    let value_text_buffer_for_case = value_text_buffer_for_search.clone();
+    let value_text_view_for_case = value_text_view_for_search.clone();
+    let search_entry_for_case = search_entry.clone();
+    let search_matches_for_case = search_matches_clone.clone();
+    let search_current_index_for_case = search_current_index_clone.clone();
+    let current_search_text_for_case = current_search_text_clone.clone();
+    let current_case_sensitive_for_case = current_case_sensitive_clone.clone();
+    let prev_button_for_case = prev_button_clone.clone();
+    let next_button_for_case = next_button_clone.clone();
+
+    case_sensitive_check.connect_toggled({
+        let tree_store_clone = tree_store_for_case.clone();
+        let tree_view_clone = tree_view_for_case.clone();
+        let selection_clone = selection_for_case.clone();
+        let value_text_buffer_clone = value_text_buffer_for_case.clone();
+        let value_text_view_clone = value_text_view_for_case.clone();
+        let search_entry_clone = search_entry_for_case.clone();
+        let search_matches_clone2 = search_matches_for_case.clone();
+        let search_current_index_clone2 = search_current_index_for_case.clone();
+        let current_search_text_clone2 = current_search_text_for_case.clone();
+        let current_case_sensitive_clone2 = current_case_sensitive_for_case.clone();
+        let case_sensitive_check_clone = case_sensitive_check.clone();
+        let prev_button_clone2 = prev_button_for_case.clone();
+        let next_button_clone2 = next_button_for_case.clone();
+        move |_| {
+            let search_text = search_entry_clone.text().to_string();
+            if search_text.is_empty() {
+                return;
+            }
+
+            let case_sensitive = case_sensitive_check_clone.is_active();
+            *current_search_text_clone2.borrow_mut() = search_text.clone();
+            *current_case_sensitive_clone2.borrow_mut() = case_sensitive;
+
+            perform_search(
+                &tree_store_clone,
+                &search_text,
+                case_sensitive,
+                &search_matches_clone2,
+                &search_current_index_clone2,
+            );
+
+            let matches = search_matches_clone2.borrow();
+            let has_matches = !matches.is_empty();
+            prev_button_clone2.set_sensitive(has_matches);
+            next_button_clone2.set_sensitive(has_matches);
+
+            if has_matches {
+                let current_idx = search_current_index_clone2.borrow();
+                navigate_to_match(
+                    &tree_view_clone,
+                    &selection_clone,
+                    &tree_store_clone,
+                    &value_text_buffer_clone,
+                    &value_text_view_clone,
+                    &matches,
+                    *current_idx,
+                    &search_text,
+                    case_sensitive,
+                );
+            }
+        }
+    });
+
+    // Connect Previous button
+    let tree_store_for_prev = tree_store_for_search.clone();
+    let tree_view_for_prev = tree_view_for_search.clone();
+    let selection_for_prev = selection_for_search.clone();
+    let value_text_buffer_for_prev = value_text_buffer_for_search.clone();
+    let value_text_view_for_prev = value_text_view_for_search.clone();
+    let search_matches_for_prev = search_matches_clone.clone();
+    let search_current_index_for_prev = search_current_index_clone.clone();
+    let current_search_text_for_prev = current_search_text_clone.clone();
+    let current_case_sensitive_for_prev = current_case_sensitive_clone.clone();
+
+    prev_button.connect_clicked({
+        let tree_store_clone = tree_store_for_prev.clone();
+        let tree_view_clone = tree_view_for_prev.clone();
+        let selection_clone = selection_for_prev.clone();
+        let value_text_buffer_clone = value_text_buffer_for_prev.clone();
+        let value_text_view_clone = value_text_view_for_prev.clone();
+        let search_matches_clone2 = search_matches_for_prev.clone();
+        let search_current_index_clone2 = search_current_index_for_prev.clone();
+        let current_search_text_clone2 = current_search_text_for_prev.clone();
+        let current_case_sensitive_clone2 = current_case_sensitive_for_prev.clone();
+        move |_| {
+            let matches = search_matches_clone2.borrow();
+            if matches.is_empty() {
+                return;
+            }
+
+            let mut current_idx = search_current_index_clone2.borrow_mut();
+            if let Some(idx) = *current_idx {
+                let new_idx = if idx == 0 { matches.len() - 1 } else { idx - 1 };
+                *current_idx = Some(new_idx);
+                let search_text = current_search_text_clone2.borrow().clone();
+                let case_sensitive = *current_case_sensitive_clone2.borrow();
+                navigate_to_match(
+                    &tree_view_clone,
+                    &selection_clone,
+                    &tree_store_clone,
+                    &value_text_buffer_clone,
+                    &value_text_view_clone,
+                    &matches,
+                    Some(new_idx),
+                    &search_text,
+                    case_sensitive,
+                );
+            }
+        }
+    });
+
+    // Connect Next button
+    let tree_store_for_next = tree_store_for_search.clone();
+    let tree_view_for_next = tree_view_for_search.clone();
+    let selection_for_next = selection_for_search.clone();
+    let value_text_buffer_for_next = value_text_buffer_for_search.clone();
+    let value_text_view_for_next = value_text_view_for_search.clone();
+    let search_matches_for_next = search_matches_clone.clone();
+    let search_current_index_for_next = search_current_index_clone.clone();
+    let current_search_text_for_next = current_search_text_clone.clone();
+    let current_case_sensitive_for_next = current_case_sensitive_clone.clone();
+
+    next_button.connect_clicked({
+        let tree_store_clone = tree_store_for_next.clone();
+        let tree_view_clone = tree_view_for_next.clone();
+        let selection_clone = selection_for_next.clone();
+        let value_text_buffer_clone = value_text_buffer_for_next.clone();
+        let value_text_view_clone = value_text_view_for_next.clone();
+        let search_matches_clone2 = search_matches_for_next.clone();
+        let search_current_index_clone2 = search_current_index_for_next.clone();
+        let current_search_text_clone2 = current_search_text_for_next.clone();
+        let current_case_sensitive_clone2 = current_case_sensitive_for_next.clone();
+        move |_| {
+            let matches = search_matches_clone2.borrow();
+            if matches.is_empty() {
+                return;
+            }
+
+            let mut current_idx = search_current_index_clone2.borrow_mut();
+            if let Some(idx) = *current_idx {
+                let new_idx = if idx == matches.len() - 1 { 0 } else { idx + 1 };
+                *current_idx = Some(new_idx);
+                let search_text = current_search_text_clone2.borrow().clone();
+                let case_sensitive = *current_case_sensitive_clone2.borrow();
+                navigate_to_match(
+                    &tree_view_clone,
+                    &selection_clone,
+                    &tree_store_clone,
+                    &value_text_buffer_clone,
+                    &value_text_view_clone,
+                    &matches,
+                    Some(new_idx),
+                    &search_text,
+                    case_sensitive,
+                );
+            }
+        }
+    });
+
+    // Connect Enter key in search entry for next match
+    let tree_store_for_enter = tree_store_for_search.clone();
+    let tree_view_for_enter = tree_view_for_search.clone();
+    let selection_for_enter = selection_for_search.clone();
+    let value_text_buffer_for_enter = value_text_buffer_for_search.clone();
+    let value_text_view_for_enter = value_text_view_for_search.clone();
+    let search_matches_for_enter = search_matches_clone.clone();
+    let search_current_index_for_enter = search_current_index_clone.clone();
+    let current_search_text_for_enter = current_search_text_clone.clone();
+    let current_case_sensitive_for_enter = current_case_sensitive_clone.clone();
+    search_entry.connect_activate({
+        let tree_store_clone = tree_store_for_enter.clone();
+        let tree_view_clone = tree_view_for_enter.clone();
+        let selection_clone = selection_for_enter.clone();
+        let value_text_buffer_clone = value_text_buffer_for_enter.clone();
+        let value_text_view_clone = value_text_view_for_enter.clone();
+        let search_matches_clone2 = search_matches_for_enter.clone();
+        let search_current_index_clone2 = search_current_index_for_enter.clone();
+        let current_search_text_clone2 = current_search_text_for_enter.clone();
+        let current_case_sensitive_clone2 = current_case_sensitive_for_enter.clone();
+        move |_| {
+            let matches = search_matches_clone2.borrow();
+            if matches.is_empty() {
+                return;
+            }
+
+            let mut current_idx = search_current_index_clone2.borrow_mut();
+            if let Some(idx) = *current_idx {
+                let new_idx = if idx == matches.len() - 1 { 0 } else { idx + 1 };
+                *current_idx = Some(new_idx);
+                let search_text = current_search_text_clone2.borrow().clone();
+                let case_sensitive = *current_case_sensitive_clone2.borrow();
+                navigate_to_match(
+                    &tree_view_clone,
+                    &selection_clone,
+                    &tree_store_clone,
+                    &value_text_buffer_clone,
+                    &value_text_view_clone,
+                    &matches,
+                    Some(new_idx),
+                    &search_text,
+                    case_sensitive,
+                );
+            }
+        }
+    });
+
+    // Connect Close button
+    let search_toolbar_for_close = search_toolbar.clone();
+    let search_entry_for_close = search_entry.clone();
+    close_search_button.connect_clicked(move |_| {
+        search_toolbar_for_close.set_visible(false);
+        search_toolbar_for_close.set_no_show_all(true);
+        search_entry_for_close.set_text("");
+    });
+
+    // Connect Find menu item
+    let search_toolbar_for_menu = search_toolbar.clone();
+    let search_entry_for_menu = search_entry.clone();
+    find_menu_item.connect_activate(move |_| {
+        search_toolbar_for_menu.set_no_show_all(false);
+        search_toolbar_for_menu.set_visible(true);
+        search_toolbar_for_menu.show_all();
+        // Use GLib idle to ensure focus happens after widget is shown
+        let search_entry_clone = search_entry_for_menu.clone();
+        glib::idle_add_local(move || {
+            search_entry_clone.grab_focus();
+            glib::ControlFlow::Break
+        });
+    });
+
+    // Connect Ctrl+F keyboard shortcut via window key press event
+    // This works even when menu bar doesn't have focus
+    let search_toolbar_for_accel = search_toolbar.clone();
+    let search_entry_for_accel = search_entry.clone();
+    window.connect_key_press_event(move |_, event| {
+        let keyval = event.keyval();
+        let state = event.state();
+
+        // Check for Ctrl+F (or Cmd+F on macOS)
+        // Use key name to be more reliable across different keyboard layouts
+        if let Some(key_name) = keyval.name() {
+            let is_f_key = key_name.as_str() == "f" || key_name.as_str() == "F";
+            let has_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let has_meta = state.contains(gtk::gdk::ModifierType::META_MASK);
+
+            if is_f_key && (has_ctrl || has_meta) {
+                search_toolbar_for_accel.set_no_show_all(false);
+                search_toolbar_for_accel.set_visible(true);
+                search_toolbar_for_accel.show_all();
+                // Use GLib idle to ensure focus happens after widget is shown
+                let search_entry_clone = search_entry_for_accel.clone();
+                glib::idle_add_local(move || {
+                    search_entry_clone.grab_focus();
+                    glib::ControlFlow::Break
+                });
+                return gtk::glib::Propagation::Stop;
+            }
+        }
+        gtk::glib::Propagation::Proceed
+    });
+
+    // Create main container with menu bar, search toolbar, and paned
     let main_box = GtkBox::new(Orientation::Vertical, 0);
     main_box.pack_start(&menu_bar, false, false, 0);
+    main_box.pack_start(&search_toolbar, false, false, 0);
     main_box.pack_start(&paned, true, true, 0);
 
     window.add(&main_box);
