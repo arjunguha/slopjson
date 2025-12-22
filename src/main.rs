@@ -290,7 +290,6 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
     // Open menu item
     let open_menu_item = MenuItem::with_label("Open");
-    gtk::prelude::GtkMenuItemExt::set_accel_path(&open_menu_item, Some("<Primary>o"));
     open_menu_item.add_accelerator(
         "activate",
         &accel_group,
@@ -344,7 +343,6 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
     // Exit menu item
     let exit_menu_item = MenuItem::with_label("Exit");
-    gtk::prelude::GtkMenuItemExt::set_accel_path(&exit_menu_item, Some("<Alt>F4"));
     exit_menu_item.add_accelerator(
         "activate",
         &accel_group,
@@ -365,7 +363,6 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
     // Paste menu item
     let paste_menu_item = MenuItem::with_label("Paste");
-    gtk::prelude::GtkMenuItemExt::set_accel_path(&paste_menu_item, Some("<Primary>v"));
     paste_menu_item.add_accelerator(
         "activate",
         &accel_group,
@@ -397,7 +394,6 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
     // Copy menu item
     let copy_menu_item = MenuItem::with_label("Copy");
-    gtk::prelude::GtkMenuItemExt::set_accel_path(&copy_menu_item, Some("<Primary>c"));
     copy_menu_item.add_accelerator(
         "activate",
         &accel_group,
@@ -436,7 +432,6 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     remove_file_menu_item.set_sensitive(false);
 
     // Add Delete key accelerator
-    gtk::prelude::GtkMenuItemExt::set_accel_path(&remove_file_menu_item, Some("<Delete>"));
     remove_file_menu_item.add_accelerator(
         "activate",
         &accel_group,
@@ -465,7 +460,6 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
     // Find menu item
     let find_menu_item = MenuItem::with_label("Find");
-    gtk::prelude::GtkMenuItemExt::set_accel_path(&find_menu_item, Some("<Primary>f"));
     find_menu_item.add_accelerator(
         "activate",
         &accel_group,
