@@ -530,123 +530,123 @@ fn build_ui(app: &Application, initial_files: &[String]) {
         std::rc::Rc::new(std::cell::RefCell::new(false));
 
     // Function to perform search
-    let perform_search =
-        |tree_store: &TreeStore,
-         search_text: &str,
-         case_sensitive: bool,
-         search_matches: &std::rc::Rc<std::cell::RefCell<Vec<SearchMatch>>>,
-         search_current_index: &std::rc::Rc<std::cell::RefCell<Option<usize>>>,
-         current_selection: Option<&gtk::TreePath>| {
-            let mut matches = Vec::new();
-            let search_text_lower = if case_sensitive {
-                search_text.to_string()
+    let perform_search = |tree_store: &TreeStore,
+                          search_text: &str,
+                          case_sensitive: bool,
+                          search_matches: &std::rc::Rc<std::cell::RefCell<Vec<SearchMatch>>>,
+                          search_current_index: &std::rc::Rc<std::cell::RefCell<Option<usize>>>,
+                          current_selection: Option<&gtk::TreePath>| {
+        let mut matches = Vec::new();
+        let search_text_lower = if case_sensitive {
+            search_text.to_string()
+        } else {
+            search_text.to_lowercase()
+        };
+
+        // Recursively search through tree - only search leaf nodes
+        fn search_tree(
+            tree_store: &TreeStore,
+            iter: &gtk::TreeIter,
+            search_text: &str,
+            search_text_lower: &str,
+            case_sensitive: bool,
+            matches: &mut Vec<SearchMatch>,
+        ) {
+            // Check if this node has children
+            let has_children = tree_store.iter_children(Some(iter)).is_some();
+
+            // Only search leaf nodes (nodes with no children)
+            if !has_children {
+                if let Some(path) = tree_store.path(iter) {
+                    // Get key (column 0) and value (columns 1 and 3)
+                    let key = tree_store
+                        .value(iter, 0)
+                        .get::<String>()
+                        .unwrap_or_default();
+                    let value_preview = tree_store
+                        .value(iter, 1)
+                        .get::<String>()
+                        .unwrap_or_default();
+                    let full_value = tree_store
+                        .value(iter, 3)
+                        .get::<String>()
+                        .unwrap_or_default();
+
+                    // Find all occurrences in the key
+                    let key_occurrences = find_all_occurrences(&key, search_text, case_sensitive);
+                    for (_start, _end) in key_occurrences {
+                        matches.push(SearchMatch {
+                            path: path.clone(),
+                            is_key_match: true,
+                        });
+                    }
+
+                    // Find all occurrences in the value
+                    // We need to format it the same way as we display it, so offsets match
+                    let value_to_search = format_value_from_string(&full_value, &value_preview);
+                    let value_occurrences =
+                        find_all_occurrences(&value_to_search, search_text, case_sensitive);
+                    for (_start, _end) in value_occurrences {
+                        matches.push(SearchMatch {
+                            path: path.clone(),
+                            is_key_match: false,
+                        });
+                    }
+                }
             } else {
-                search_text.to_lowercase()
-            };
-
-            // Recursively search through tree - only search leaf nodes
-            fn search_tree(
-                tree_store: &TreeStore,
-                iter: &gtk::TreeIter,
-                search_text: &str,
-                search_text_lower: &str,
-                case_sensitive: bool,
-                matches: &mut Vec<SearchMatch>,
-            ) {
-                // Check if this node has children
-                let has_children = tree_store.iter_children(Some(iter)).is_some();
-
-                // Only search leaf nodes (nodes with no children)
-                if !has_children {
-                    if let Some(path) = tree_store.path(iter) {
-                        // Get key (column 0) and value (columns 1 and 3)
-                        let key = tree_store
-                            .value(iter, 0)
-                            .get::<String>()
-                            .unwrap_or_default();
-                        let value_preview = tree_store
-                            .value(iter, 1)
-                            .get::<String>()
-                            .unwrap_or_default();
-                        let full_value = tree_store
-                            .value(iter, 3)
-                            .get::<String>()
-                            .unwrap_or_default();
-
-                        // Find all occurrences in the key
-                        let key_occurrences =
-                            find_all_occurrences(&key, search_text, case_sensitive);
-                        for (_start, _end) in key_occurrences {
-                            matches.push(SearchMatch {
-                                path: path.clone(),
-                                is_key_match: true,
-                            });
-                        }
-
-                        // Find all occurrences in the value
-                        // We need to format it the same way as we display it, so offsets match
-                        let value_to_search = format_value_from_string(&full_value, &value_preview);
-                        let value_occurrences =
-                            find_all_occurrences(&value_to_search, search_text, case_sensitive);
-                        for (_start, _end) in value_occurrences {
-                            matches.push(SearchMatch {
-                                path: path.clone(),
-                                is_key_match: false,
-                            });
-                        }
-                    }
-                } else {
-                    // This node has children, so recursively search children
-                    if let Some(mut child_iter) = tree_store.iter_children(Some(iter)) {
-                        loop {
-                            search_tree(
-                                tree_store,
-                                &child_iter,
-                                search_text,
-                                search_text_lower,
-                                case_sensitive,
-                                matches,
-                            );
-                            if !tree_store.iter_next(&mut child_iter) {
-                                break;
-                            }
+                // This node has children, so recursively search children
+                if let Some(mut child_iter) = tree_store.iter_children(Some(iter)) {
+                    loop {
+                        search_tree(
+                            tree_store,
+                            &child_iter,
+                            search_text,
+                            search_text_lower,
+                            case_sensitive,
+                            matches,
+                        );
+                        if !tree_store.iter_next(&mut child_iter) {
+                            break;
                         }
                     }
                 }
             }
+        }
 
-            // Search from each root node
-            if let Some(mut root_iter) = tree_store.iter_first() {
-                loop {
-                    search_tree(
-                        tree_store,
-                        &root_iter,
-                        search_text,
-                        &search_text_lower,
-                        case_sensitive,
-                        &mut matches,
-                    );
-                    if !tree_store.iter_next(&mut root_iter) {
-                        break;
-                    }
+        // Search from each root node
+        if let Some(mut root_iter) = tree_store.iter_first() {
+            loop {
+                search_tree(
+                    tree_store,
+                    &root_iter,
+                    search_text,
+                    &search_text_lower,
+                    case_sensitive,
+                    &mut matches,
+                );
+                if !tree_store.iter_next(&mut root_iter) {
+                    break;
                 }
             }
+        }
 
-            let is_empty = matches.is_empty();
-            
-            // Find the starting index based on current selection (before moving matches)
-            let starting_index = if is_empty {
-                None
-            } else if let Some(current_path) = current_selection {
-                // Find the first match at or after the current selection
-                // Compare paths by depth and indices lexicographically
-                let current_depth = current_path.depth();
-                let current_indices: Vec<i32> = current_path.indices().to_vec();
-                
-                matches.iter().position(|m| {
+        let is_empty = matches.is_empty();
+
+        // Find the starting index based on current selection (before moving matches)
+        let starting_index = if is_empty {
+            None
+        } else if let Some(current_path) = current_selection {
+            // Find the first match at or after the current selection
+            // Compare paths by depth and indices lexicographically
+            let current_depth = current_path.depth();
+            let current_indices: Vec<i32> = current_path.indices().to_vec();
+
+            matches
+                .iter()
+                .position(|m| {
                     let match_depth = m.path.depth();
                     let match_indices: Vec<i32> = m.path.indices().to_vec();
-                    
+
                     // Compare lexicographically: first by depth, then by indices
                     if current_depth < match_depth {
                         true
@@ -656,14 +656,15 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                         // Same depth, compare indices lexicographically
                         current_indices <= match_indices
                     }
-                }).or(Some(0)) // If no match found after current position, start from beginning
-            } else {
-                Some(0) // No current selection, start from beginning
-            };
-            
-            *search_matches.borrow_mut() = matches;
-            *search_current_index.borrow_mut() = starting_index;
+                })
+                .or(Some(0)) // If no match found after current position, start from beginning
+        } else {
+            Some(0) // No current selection, start from beginning
         };
+
+        *search_matches.borrow_mut() = matches;
+        *search_current_index.borrow_mut() = starting_index;
+    };
 
     // Function to navigate to search result and highlight the occurrence
     let navigate_to_match = |tree_view: &TreeView,
@@ -858,9 +859,9 @@ fn build_ui(app: &Application, initial_files: &[String]) {
             *current_case_sensitive_clone2.borrow_mut() = case_sensitive;
 
             // Get current selection path to start search from current view position
-            let current_path = selection_clone.selected().and_then(|(_model, iter)| {
-                tree_store_clone.path(&iter)
-            });
+            let current_path = selection_clone
+                .selected()
+                .and_then(|(_model, iter)| tree_store_clone.path(&iter));
 
             perform_search(
                 &tree_store_clone,
@@ -932,9 +933,9 @@ fn build_ui(app: &Application, initial_files: &[String]) {
             *current_case_sensitive_clone2.borrow_mut() = case_sensitive;
 
             // Get current selection path to start search from current view position
-            let current_path = selection_clone.selected().and_then(|(_model, iter)| {
-                tree_store_clone.path(&iter)
-            });
+            let current_path = selection_clone
+                .selected()
+                .and_then(|(_model, iter)| tree_store_clone.path(&iter));
 
             perform_search(
                 &tree_store_clone,
