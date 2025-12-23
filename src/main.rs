@@ -23,7 +23,7 @@ use gtk::{
     TreeView, TreeViewColumn,
 };
 use search::{find_all_occurrences, find_occurrence_to_highlight};
-use slopjson::json_reader::{parse_file, parse_text_content, ParseResult};
+use slopjson::json_reader::{parse_file, parse_text_content, ParseError, ParseResult};
 use slopjson::value_formatting::format_value_from_string;
 use std::path::Path;
 use tree_builder::{add_jsonl_to_tree, add_single_value_to_tree};
@@ -1151,7 +1151,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
 /// Loads parsed content into the tree store
 fn load_parse_result(
-    result: Result<ParseResult, json_reader::ParseError>,
+    result: Result<ParseResult, ParseError>,
     default_name: &str,
     tree_store: &TreeStore,
     value_text_buffer: &TextBuffer,
