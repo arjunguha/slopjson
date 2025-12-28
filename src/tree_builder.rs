@@ -139,13 +139,7 @@ pub fn add_single_value_to_tree(
     // This ensures proper path generation for nested structures
     let root_path = "$";
     set_tree_node_values(
-        tree_store,
-        &root_iter,
-        root_name,
-        value,
-        root_path,
-        root_path,
-        doc_id,
+        tree_store, &root_iter, root_name, value, root_path, root_path, doc_id,
     );
     populate_tree(tree_store, &root_iter, value, root_path, root_path, doc_id);
 }

@@ -12,8 +12,8 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-mod json_reader;
 mod document_store;
+mod json_reader;
 mod path_formatting;
 mod search;
 mod tree_builder;
@@ -239,10 +239,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                 // This is a root node - remove it
                 tree_store.remove(&iter);
                 if doc_id >= 0 {
-                    if let Some(doc) = documents
-                        .borrow_mut()
-                        .get_mut(doc_id as usize)
-                    {
+                    if let Some(doc) = documents.borrow_mut().get_mut(doc_id as usize) {
                         *doc = None;
                     }
                 }
@@ -578,144 +575,145 @@ fn build_ui(app: &Application, initial_files: &[String]) {
               search_matches: &std::rc::Rc<std::cell::RefCell<Vec<SearchMatch>>>,
               search_current_index: &std::rc::Rc<std::cell::RefCell<Option<usize>>>,
               current_selection: Option<&gtk::TreePath>| {
-        let mut matches = Vec::new();
-        let search_text_lower = if case_sensitive {
-            search_text.to_string()
-        } else {
-            search_text.to_lowercase()
-        };
-
-        // Recursively search through tree - only search leaf nodes
-        fn search_tree(
-            tree_store: &TreeStore,
-            iter: &gtk::TreeIter,
-            search_text: &str,
-            search_text_lower: &str,
-            case_sensitive: bool,
-            matches: &mut Vec<SearchMatch>,
-            documents: &std::rc::Rc<std::cell::RefCell<Vec<Option<StoredDocument>>>>,
-        ) {
-            // Check if this node has children
-            let has_children = tree_store.iter_children(Some(iter)).is_some();
-
-            // Only search leaf nodes (nodes with no children)
-            if !has_children {
-                if let Some(path) = tree_store.path(iter) {
-                    // Get key (column 0) and value (columns 1 and 3)
-                    let key = tree_store
-                        .value(iter, 0)
-                        .get::<String>()
-                        .unwrap_or_default();
-                    let value_preview = tree_store
-                        .value(iter, 1)
-                        .get::<String>()
-                        .unwrap_or_default();
-                    let data_path = tree_store
-                        .value(iter, 3)
-                        .get::<String>()
-                        .unwrap_or_default();
-                    let doc_id = tree_store.value(iter, 4).get::<i64>().unwrap_or(-1);
-
-                    // Find all occurrences in the key
-                    let key_occurrences = find_all_occurrences(&key, search_text, case_sensitive);
-                    for (_start, _end) in key_occurrences {
-                        matches.push(SearchMatch {
-                            path: path.clone(),
-                            is_key_match: true,
-                        });
-                    }
-
-                    // Find all occurrences in the value
-                    // We need to format it the same way as we display it, so offsets match
-                    let value_to_search = {
-                        let docs = documents.borrow();
-                        let value = docs
-                            .get(doc_id as usize)
-                            .and_then(|doc| doc.as_ref())
-                            .and_then(|doc| doc.lookup_value(&data_path));
-                        value
-                            .map(format_value_literal)
-                            .unwrap_or_else(|| value_preview.clone())
-                    };
-                    let value_occurrences =
-                        find_all_occurrences(&value_to_search, search_text, case_sensitive);
-                    for (_start, _end) in value_occurrences {
-                        matches.push(SearchMatch {
-                            path: path.clone(),
-                            is_key_match: false,
-                        });
-                    }
-                }
+            let mut matches = Vec::new();
+            let search_text_lower = if case_sensitive {
+                search_text.to_string()
             } else {
-                // This node has children, so recursively search children
-                if let Some(mut child_iter) = tree_store.iter_children(Some(iter)) {
-                    loop {
-                        search_tree(
-                            tree_store,
-                            &child_iter,
-                            search_text,
-                            search_text_lower,
-                            case_sensitive,
-                            matches,
-                            documents,
-                        );
-                        if !tree_store.iter_next(&mut child_iter) {
-                            break;
+                search_text.to_lowercase()
+            };
+
+            // Recursively search through tree - only search leaf nodes
+            fn search_tree(
+                tree_store: &TreeStore,
+                iter: &gtk::TreeIter,
+                search_text: &str,
+                search_text_lower: &str,
+                case_sensitive: bool,
+                matches: &mut Vec<SearchMatch>,
+                documents: &std::rc::Rc<std::cell::RefCell<Vec<Option<StoredDocument>>>>,
+            ) {
+                // Check if this node has children
+                let has_children = tree_store.iter_children(Some(iter)).is_some();
+
+                // Only search leaf nodes (nodes with no children)
+                if !has_children {
+                    if let Some(path) = tree_store.path(iter) {
+                        // Get key (column 0) and value (columns 1 and 3)
+                        let key = tree_store
+                            .value(iter, 0)
+                            .get::<String>()
+                            .unwrap_or_default();
+                        let value_preview = tree_store
+                            .value(iter, 1)
+                            .get::<String>()
+                            .unwrap_or_default();
+                        let data_path = tree_store
+                            .value(iter, 3)
+                            .get::<String>()
+                            .unwrap_or_default();
+                        let doc_id = tree_store.value(iter, 4).get::<i64>().unwrap_or(-1);
+
+                        // Find all occurrences in the key
+                        let key_occurrences =
+                            find_all_occurrences(&key, search_text, case_sensitive);
+                        for (_start, _end) in key_occurrences {
+                            matches.push(SearchMatch {
+                                path: path.clone(),
+                                is_key_match: true,
+                            });
+                        }
+
+                        // Find all occurrences in the value
+                        // We need to format it the same way as we display it, so offsets match
+                        let value_to_search = {
+                            let docs = documents.borrow();
+                            let value = docs
+                                .get(doc_id as usize)
+                                .and_then(|doc| doc.as_ref())
+                                .and_then(|doc| doc.lookup_value(&data_path));
+                            value
+                                .map(format_value_literal)
+                                .unwrap_or_else(|| value_preview.clone())
+                        };
+                        let value_occurrences =
+                            find_all_occurrences(&value_to_search, search_text, case_sensitive);
+                        for (_start, _end) in value_occurrences {
+                            matches.push(SearchMatch {
+                                path: path.clone(),
+                                is_key_match: false,
+                            });
+                        }
+                    }
+                } else {
+                    // This node has children, so recursively search children
+                    if let Some(mut child_iter) = tree_store.iter_children(Some(iter)) {
+                        loop {
+                            search_tree(
+                                tree_store,
+                                &child_iter,
+                                search_text,
+                                search_text_lower,
+                                case_sensitive,
+                                matches,
+                                documents,
+                            );
+                            if !tree_store.iter_next(&mut child_iter) {
+                                break;
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Search from each root node
-        if let Some(mut root_iter) = tree_store.iter_first() {
-            loop {
-                search_tree(
-                    tree_store,
-                    &root_iter,
-                    search_text,
-                    &search_text_lower,
-                    case_sensitive,
-                    &mut matches,
-                    &documents_for_search,
-                );
-                if !tree_store.iter_next(&mut root_iter) {
-                    break;
+            // Search from each root node
+            if let Some(mut root_iter) = tree_store.iter_first() {
+                loop {
+                    search_tree(
+                        tree_store,
+                        &root_iter,
+                        search_text,
+                        &search_text_lower,
+                        case_sensitive,
+                        &mut matches,
+                        &documents_for_search,
+                    );
+                    if !tree_store.iter_next(&mut root_iter) {
+                        break;
+                    }
                 }
             }
-        }
 
-        let is_empty = matches.is_empty();
+            let is_empty = matches.is_empty();
 
-        // Find the starting index based on current selection (before moving matches)
-        let starting_index = if is_empty {
-            None
-        } else if let Some(current_path) = current_selection {
-            // Find the first match at or after the current selection
-            // Compare paths by depth and indices lexicographically
-            let current_depth = current_path.depth();
-            let current_indices: Vec<i32> = current_path.indices().to_vec();
+            // Find the starting index based on current selection (before moving matches)
+            let starting_index = if is_empty {
+                None
+            } else if let Some(current_path) = current_selection {
+                // Find the first match at or after the current selection
+                // Compare paths by depth and indices lexicographically
+                let current_depth = current_path.depth();
+                let current_indices: Vec<i32> = current_path.indices().to_vec();
 
-            matches
-                .iter()
-                .position(|m| {
-                    let match_depth = m.path.depth();
-                    let match_indices: Vec<i32> = m.path.indices().to_vec();
+                matches
+                    .iter()
+                    .position(|m| {
+                        let match_depth = m.path.depth();
+                        let match_indices: Vec<i32> = m.path.indices().to_vec();
 
-                    // Compare lexicographically: first by depth, then by indices
-                    if current_depth < match_depth {
-                        true
-                    } else if current_depth > match_depth {
-                        false
-                    } else {
-                        // Same depth, compare indices lexicographically
-                        current_indices <= match_indices
-                    }
-                })
-                .or(Some(0)) // If no match found after current position, start from beginning
-        } else {
-            Some(0) // No current selection, start from beginning
-        };
+                        // Compare lexicographically: first by depth, then by indices
+                        if current_depth < match_depth {
+                            true
+                        } else if current_depth > match_depth {
+                            false
+                        } else {
+                            // Same depth, compare indices lexicographically
+                            current_indices <= match_indices
+                        }
+                    })
+                    .or(Some(0)) // If no match found after current position, start from beginning
+            } else {
+                Some(0) // No current selection, start from beginning
+            };
 
             *search_matches.borrow_mut() = matches;
             *search_current_index.borrow_mut() = starting_index;
@@ -726,152 +724,154 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     let navigate_to_match = std::rc::Rc::new({
         let documents_for_navigation = documents.clone();
         move |tree_view: &TreeView,
-                             selection: &gtk::TreeSelection,
-                             tree_store: &TreeStore,
-                             value_text_buffer: &TextBuffer,
-                             value_text_view: &TextView,
-                             matches: &[SearchMatch],
-                             index: Option<usize>,
-                             search_text: &str,
-                             case_sensitive: bool| {
-        if let Some(idx) = index {
-            if idx < matches.len() {
-                let search_match = &matches[idx];
-                let path = &search_match.path;
+              selection: &gtk::TreeSelection,
+              tree_store: &TreeStore,
+              value_text_buffer: &TextBuffer,
+              value_text_view: &TextView,
+              matches: &[SearchMatch],
+              index: Option<usize>,
+              search_text: &str,
+              case_sensitive: bool| {
+            if let Some(idx) = index {
+                if idx < matches.len() {
+                    let search_match = &matches[idx];
+                    let path = &search_match.path;
 
-                // Expand all parent nodes to show the path to the leaf
-                // We need to expand from root to leaf, so we'll go up from the leaf
-                // and expand each parent path
-                let mut parent_path = path.clone();
-                let mut paths_to_expand = Vec::new();
+                    // Expand all parent nodes to show the path to the leaf
+                    // We need to expand from root to leaf, so we'll go up from the leaf
+                    // and expand each parent path
+                    let mut parent_path = path.clone();
+                    let mut paths_to_expand = Vec::new();
 
-                // Collect all parent paths (from root to leaf)
-                while parent_path.up() {
-                    paths_to_expand.push(parent_path.clone());
-                }
+                    // Collect all parent paths (from root to leaf)
+                    while parent_path.up() {
+                        paths_to_expand.push(parent_path.clone());
+                    }
 
-                // Expand from root to leaf (reverse order)
-                for expand_path in paths_to_expand.iter().rev() {
-                    tree_view.expand_row(expand_path, false);
-                }
+                    // Expand from root to leaf (reverse order)
+                    for expand_path in paths_to_expand.iter().rev() {
+                        tree_view.expand_row(expand_path, false);
+                    }
 
-                // Select the tree node (leaf)
-                selection.select_path(path);
-                tree_view.scroll_to_cell(Some(path), None::<&TreeViewColumn>, false, 0.0, 0.0);
+                    // Select the tree node (leaf)
+                    selection.select_path(path);
+                    tree_view.scroll_to_cell(Some(path), None::<&TreeViewColumn>, false, 0.0, 0.0);
 
-                // Get the iter for the selected path to get the value
-                if let Some(iter) = tree_store.iter(path) {
-                    let data_path = tree_store
-                        .value(&iter, 3)
-                        .get::<String>()
-                        .unwrap_or_default();
-                    let doc_id = tree_store.value(&iter, 4).get::<i64>().unwrap_or(-1);
+                    // Get the iter for the selected path to get the value
+                    if let Some(iter) = tree_store.iter(path) {
+                        let data_path = tree_store
+                            .value(&iter, 3)
+                            .get::<String>()
+                            .unwrap_or_default();
+                        let doc_id = tree_store.value(&iter, 4).get::<i64>().unwrap_or(-1);
 
-                    // Format the JSON value nicely - must match the formatting used during search
-                    let preview = tree_store
-                        .value(&iter, 1)
-                        .get::<String>()
-                        .unwrap_or_default();
-                    let formatted_value = {
-                        let docs = documents_for_navigation.borrow();
-                        let value = docs
-                            .get(doc_id as usize)
-                            .and_then(|doc| doc.as_ref())
-                            .and_then(|doc| doc.lookup_value(&data_path));
-                        format_value_for_display(value, &preview)
-                    };
+                        // Format the JSON value nicely - must match the formatting used during search
+                        let preview = tree_store
+                            .value(&iter, 1)
+                            .get::<String>()
+                            .unwrap_or_default();
+                        let formatted_value = {
+                            let docs = documents_for_navigation.borrow();
+                            let value = docs
+                                .get(doc_id as usize)
+                                .and_then(|doc| doc.as_ref())
+                                .and_then(|doc| doc.lookup_value(&data_path));
+                            format_value_for_display(value, &preview)
+                        };
 
-                    // Set the text in the buffer
-                    value_text_buffer.set_text(&formatted_value);
+                        // Set the text in the buffer
+                        value_text_buffer.set_text(&formatted_value);
 
-                    // Highlight the occurrence if it's a value match
-                    if !search_match.is_key_match {
-                        // Create or get the highlight tag
-                        let tag_table = value_text_buffer.tag_table();
-                        if let Some(ref table) = tag_table {
-                            let highlight_tag = if let Some(tag) = table.lookup("search-highlight")
-                            {
-                                tag
-                            } else {
-                                let tag = gtk::TextTag::new(Some("search-highlight"));
-                                tag.set_property("background", &"yellow");
-                                tag.set_property("foreground", &"black");
-                                table.add(&tag);
-                                tag
-                            };
+                        // Highlight the occurrence if it's a value match
+                        if !search_match.is_key_match {
+                            // Create or get the highlight tag
+                            let tag_table = value_text_buffer.tag_table();
+                            if let Some(ref table) = tag_table {
+                                let highlight_tag =
+                                    if let Some(tag) = table.lookup("search-highlight") {
+                                        tag
+                                    } else {
+                                        let tag = gtk::TextTag::new(Some("search-highlight"));
+                                        tag.set_property("background", &"yellow");
+                                        tag.set_property("foreground", &"black");
+                                        table.add(&tag);
+                                        tag
+                                    };
 
-                            // Remove any existing highlights
-                            let mut start_iter = value_text_buffer.start_iter();
-                            let mut end_iter = value_text_buffer.end_iter();
-                            value_text_buffer.remove_tag(
-                                &highlight_tag,
-                                &mut start_iter,
-                                &mut end_iter,
-                            );
+                                // Remove any existing highlights
+                                let mut start_iter = value_text_buffer.start_iter();
+                                let mut end_iter = value_text_buffer.end_iter();
+                                value_text_buffer.remove_tag(
+                                    &highlight_tag,
+                                    &mut start_iter,
+                                    &mut end_iter,
+                                );
 
-                            // Build list of matches for this same path (for use with find_occurrence_to_highlight)
-                            // This contains all matches (both key and value) for the current path, in order
-                            let mut path_matches: Vec<(usize, bool)> = Vec::new();
-                            for (i, m) in matches.iter().enumerate() {
-                                if m.path == *path {
-                                    path_matches.push((i, m.is_key_match));
+                                // Build list of matches for this same path (for use with find_occurrence_to_highlight)
+                                // This contains all matches (both key and value) for the current path, in order
+                                let mut path_matches: Vec<(usize, bool)> = Vec::new();
+                                for (i, m) in matches.iter().enumerate() {
+                                    if m.path == *path {
+                                        path_matches.push((i, m.is_key_match));
+                                    }
                                 }
-                            }
 
-                            // Find which occurrence to highlight using the abstracted function
-                            // This will find the correct occurrence within the formatted_value
-                            // Only proceed if the current match is in path_matches
-                            if path_matches
-                                .iter()
-                                .any(|(global_idx, _)| *global_idx == idx)
-                            {
-                                if let Some((start, end)) = find_occurrence_to_highlight(
-                                    &path_matches,
-                                    idx,
-                                    &formatted_value,
-                                    search_text,
-                                    case_sensitive,
-                                ) {
-                                    // `start`/`end` are character offsets (not bytes). GTK expects character offsets.
-                                    let formatted_chars = formatted_value.chars().count();
+                                // Find which occurrence to highlight using the abstracted function
+                                // This will find the correct occurrence within the formatted_value
+                                // Only proceed if the current match is in path_matches
+                                if path_matches
+                                    .iter()
+                                    .any(|(global_idx, _)| *global_idx == idx)
+                                {
+                                    if let Some((start, end)) = find_occurrence_to_highlight(
+                                        &path_matches,
+                                        idx,
+                                        &formatted_value,
+                                        search_text,
+                                        case_sensitive,
+                                    ) {
+                                        // `start`/`end` are character offsets (not bytes). GTK expects character offsets.
+                                        let formatted_chars = formatted_value.chars().count();
 
-                                    // Verify the positions are valid (in character offsets)
-                                    if start <= formatted_chars
-                                        && end <= formatted_chars
-                                        && start < end
-                                    {
-                                        let mut start_iter =
-                                            value_text_buffer.iter_at_offset(start as i32);
-                                        let mut end_iter =
-                                            value_text_buffer.iter_at_offset(end as i32);
-                                        value_text_buffer.apply_tag(
-                                            &highlight_tag,
-                                            &mut start_iter,
-                                            &mut end_iter,
-                                        );
+                                        // Verify the positions are valid (in character offsets)
+                                        if start <= formatted_chars
+                                            && end <= formatted_chars
+                                            && start < end
+                                        {
+                                            let mut start_iter =
+                                                value_text_buffer.iter_at_offset(start as i32);
+                                            let mut end_iter =
+                                                value_text_buffer.iter_at_offset(end as i32);
+                                            value_text_buffer.apply_tag(
+                                                &highlight_tag,
+                                                &mut start_iter,
+                                                &mut end_iter,
+                                            );
 
-                                        // Create a mark at the start position and scroll to it
-                                        // This is more reliable than scroll_to_iter
-                                        if let Some(mark) = value_text_buffer.create_mark(
-                                            Some("search-scroll-mark"),
-                                            &mut start_iter,
-                                            true, // left_gravity
-                                        ) {
-                                            // Scroll to make the mark visible using idle to ensure it happens after layout
-                                            let value_text_view_clone = value_text_view.clone();
-                                            let mark_clone = mark.clone();
-                                            let value_text_buffer_clone = value_text_buffer.clone();
-                                            glib::idle_add_local(move || {
-                                                value_text_view_clone
-                                                    .scroll_mark_onscreen(&mark_clone);
-                                                // Clean up the mark after scrolling
-                                                if let Some(mark) = value_text_buffer_clone
-                                                    .mark(&"search-scroll-mark")
-                                                {
-                                                    value_text_buffer_clone.delete_mark(&mark);
-                                                }
-                                                glib::ControlFlow::Break
-                                            });
+                                            // Create a mark at the start position and scroll to it
+                                            // This is more reliable than scroll_to_iter
+                                            if let Some(mark) = value_text_buffer.create_mark(
+                                                Some("search-scroll-mark"),
+                                                &mut start_iter,
+                                                true, // left_gravity
+                                            ) {
+                                                // Scroll to make the mark visible using idle to ensure it happens after layout
+                                                let value_text_view_clone = value_text_view.clone();
+                                                let mark_clone = mark.clone();
+                                                let value_text_buffer_clone =
+                                                    value_text_buffer.clone();
+                                                glib::idle_add_local(move || {
+                                                    value_text_view_clone
+                                                        .scroll_mark_onscreen(&mark_clone);
+                                                    // Clean up the mark after scrolling
+                                                    if let Some(mark) = value_text_buffer_clone
+                                                        .mark(&"search-scroll-mark")
+                                                    {
+                                                        value_text_buffer_clone.delete_mark(&mark);
+                                                    }
+                                                    glib::ControlFlow::Break
+                                                });
+                                            }
                                         }
                                     }
                                 }
@@ -881,7 +881,6 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                 }
             }
         }
-    }
     });
 
     // Connect search entry changes
