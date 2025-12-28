@@ -13,11 +13,14 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 mod json_reader;
+mod document_store;
 mod path_formatting;
 mod search;
 mod tree_builder;
 mod value_formatting;
+mod value_lookup;
 
+use document_store::{JsonLDocument, StoredDocument};
 use gtk::prelude::*;
 use gtk::{
     AccelGroup, Application, ApplicationWindow, Box as GtkBox, Button, CellRendererText,
@@ -29,7 +32,7 @@ use json_reader::{parse_file, parse_text_content, ParseResult};
 use search::{find_all_occurrences, find_occurrence_to_highlight};
 use std::path::Path;
 use tree_builder::{add_jsonl_to_tree, add_single_value_to_tree};
-use value_formatting::format_value_from_string;
+use value_formatting::{format_value_for_display, format_value_literal};
 
 fn main() {
     // Read command-line arguments before GTK initialization
@@ -82,12 +85,13 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     left_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
     left_scroll.set_vexpand(true);
 
-    // Create tree store with columns: name, value, json_path, full_value
+    // Create tree store with columns: name, value, display_path, data_path, doc_id
     let tree_store = TreeStore::new(&[
         glib::Type::STRING, // Column 0: Display name (key/index)
         glib::Type::STRING, // Column 1: Value preview
-        glib::Type::STRING, // Column 2: Full JSON path (for selection)
-        glib::Type::STRING, // Column 3: Full JSON value as string
+        glib::Type::STRING, // Column 2: Display path (for selection)
+        glib::Type::STRING, // Column 3: Data path (for lookup)
+        glib::Type::I64,    // Column 4: Document ID
     ]);
 
     let tree_view = TreeView::with_model(&tree_store);
@@ -163,11 +167,15 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     paned.add2(&right_box);
     paned.set_position(400); // Initial split position
 
+    let documents: std::rc::Rc<std::cell::RefCell<Vec<Option<StoredDocument>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
     // Handle tree selection
     let selection = tree_view.selection();
     let path_entry_clone = path_entry.clone();
     let value_text_buffer = value_text_view.buffer().unwrap();
     let value_text_buffer_clone = value_text_buffer.clone();
+    let documents_for_selection = documents.clone();
 
     // We'll update this in the selection handler
     let remove_file_menu_item_for_selection =
@@ -178,14 +186,22 @@ fn build_ui(app: &Application, initial_files: &[String]) {
         move |sel| {
             if let Some((model, iter)) = sel.selected() {
                 let path = model.value(&iter, 2).get::<String>().unwrap_or_default();
-                let full_value = model.value(&iter, 3).get::<String>().unwrap_or_default();
+                let data_path = model.value(&iter, 3).get::<String>().unwrap_or_default();
+                let doc_id = model.value(&iter, 4).get::<i64>().unwrap_or(-1);
 
                 // Set path in the entry
                 path_entry_clone.set_text(&path);
 
                 // Format the JSON value nicely
                 let preview = model.value(&iter, 1).get::<String>().unwrap_or_default();
-                let formatted_value = format_value_from_string(&full_value, &preview);
+                let formatted_value = {
+                    let docs = documents_for_selection.borrow();
+                    let value = docs
+                        .get(doc_id as usize)
+                        .and_then(|doc| doc.as_ref())
+                        .and_then(|doc| doc.lookup_value(&data_path));
+                    format_value_for_display(value, &preview)
+                };
 
                 value_text_buffer_clone.set_text(&formatted_value);
 
@@ -214,12 +230,22 @@ fn build_ui(app: &Application, initial_files: &[String]) {
         selection: &gtk::TreeSelection,
         path_entry: &Entry,
         value_text_buffer: &TextBuffer,
+        documents: &std::rc::Rc<std::cell::RefCell<Vec<Option<StoredDocument>>>>,
     ) {
         if let Some((model, iter)) = selection.selected() {
             // Check if this is a root node (no parent)
             if model.iter_parent(&iter).is_none() {
+                let doc_id = model.value(&iter, 4).get::<i64>().unwrap_or(-1);
                 // This is a root node - remove it
                 tree_store.remove(&iter);
+                if doc_id >= 0 {
+                    if let Some(doc) = documents
+                        .borrow_mut()
+                        .get_mut(doc_id as usize)
+                    {
+                        *doc = None;
+                    }
+                }
 
                 // Clear the display if we deleted the selected item
                 path_entry.set_text("");
@@ -240,6 +266,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     let path_entry_for_menu = path_entry.clone();
     let value_text_buffer_for_menu = value_text_buffer.clone();
     let tree_view_for_menu = tree_view.clone();
+    let documents_for_menu = documents.clone();
     tree_view.connect_button_press_event(move |tree_view, event| {
         // Check for right-click (button 3)
         if event.button() == 3 {
@@ -259,6 +286,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                         let path_entry_clone = path_entry_for_menu.clone();
                         let value_text_buffer_clone = value_text_buffer_for_menu.clone();
                         let tree_view_clone = tree_view_for_menu.clone();
+                        let documents_clone = documents_for_menu.clone();
                         remove_item.connect_activate(move |_| {
                             let selection = tree_view_clone.selection();
                             remove_root_node(
@@ -266,6 +294,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                                 &selection,
                                 &path_entry_clone,
                                 &value_text_buffer_clone,
+                                &documents_clone,
                             );
                         });
 
@@ -300,11 +329,13 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     let tree_store_for_open = tree_store.clone();
     let value_text_buffer_for_open = value_text_buffer.clone();
     let window_clone = window.clone();
+    let documents_for_open = documents.clone();
 
     open_menu_item.connect_activate(move |_| {
         let tree_store_clone = tree_store_for_open.clone();
         let value_text_buffer_clone = value_text_buffer_for_open.clone();
         let window_clone2 = window_clone.clone();
+        let documents_clone = documents_for_open.clone();
 
         let dialog = FileChooserDialog::new(
             Some("Open File"),
@@ -329,6 +360,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                             Some(&name),
                             &tree_store_clone,
                             &value_text_buffer_clone,
+                            &documents_clone,
                         );
                     }
                 }
@@ -372,10 +404,12 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     );
     let tree_store_for_clipboard = tree_store.clone();
     let value_text_buffer_for_clipboard = value_text_buffer.clone();
+    let documents_for_clipboard = documents.clone();
 
     paste_menu_item.connect_activate(move |_| {
         let tree_store_clone = tree_store_for_clipboard.clone();
         let value_text_buffer_clone = value_text_buffer_for_clipboard.clone();
+        let documents_clone = documents_for_clipboard.clone();
 
         let clipboard = Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
         clipboard.request_text(move |_clipboard, text| {
@@ -385,6 +419,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                     Some("Clipboard"),
                     &tree_store_clone,
                     &value_text_buffer_clone,
+                    &documents_clone,
                 );
             } else {
                 value_text_buffer_clone.set_text("Clipboard is empty or does not contain text");
@@ -403,6 +438,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     );
     let selection_for_copy = selection.clone();
     let value_text_buffer_for_copy = value_text_buffer.clone();
+    let documents_for_copy = documents.clone();
 
     copy_menu_item.connect_activate(move |_| {
         let clipboard = Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
@@ -419,9 +455,17 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
         // If text buffer is empty, try to get value from selected tree item
         if let Some((model, iter)) = selection_for_copy.selected() {
-            let full_value = model.value(&iter, 3).get::<String>().unwrap_or_default();
-            if !full_value.is_empty() {
-                clipboard.set_text(&full_value);
+            let data_path = model.value(&iter, 3).get::<String>().unwrap_or_default();
+            let doc_id = model.value(&iter, 4).get::<i64>().unwrap_or(-1);
+            let value_json = {
+                let docs = documents_for_copy.borrow();
+                docs.get(doc_id as usize)
+                    .and_then(|doc| doc.as_ref())
+                    .and_then(|doc| doc.lookup_value(&data_path))
+                    .and_then(|value| serde_json::to_string(value).ok())
+            };
+            if let Some(value_json) = value_json {
+                clipboard.set_text(&value_json);
             }
         }
     });
@@ -447,6 +491,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     let selection_for_remove = selection.clone();
     let path_entry_for_remove = path_entry.clone();
     let value_text_buffer_for_remove = value_text_buffer.clone();
+    let documents_for_remove = documents.clone();
 
     remove_file_menu_item.connect_activate(move |_| {
         let selection = selection_for_remove.clone();
@@ -455,6 +500,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
             &selection,
             &path_entry_for_remove,
             &value_text_buffer_for_remove,
+            &documents_for_remove,
         );
     });
 
@@ -524,12 +570,14 @@ fn build_ui(app: &Application, initial_files: &[String]) {
         std::rc::Rc::new(std::cell::RefCell::new(false));
 
     // Function to perform search
-    let perform_search = |tree_store: &TreeStore,
-                          search_text: &str,
-                          case_sensitive: bool,
-                          search_matches: &std::rc::Rc<std::cell::RefCell<Vec<SearchMatch>>>,
-                          search_current_index: &std::rc::Rc<std::cell::RefCell<Option<usize>>>,
-                          current_selection: Option<&gtk::TreePath>| {
+    let perform_search = std::rc::Rc::new({
+        let documents_for_search = documents.clone();
+        move |tree_store: &TreeStore,
+              search_text: &str,
+              case_sensitive: bool,
+              search_matches: &std::rc::Rc<std::cell::RefCell<Vec<SearchMatch>>>,
+              search_current_index: &std::rc::Rc<std::cell::RefCell<Option<usize>>>,
+              current_selection: Option<&gtk::TreePath>| {
         let mut matches = Vec::new();
         let search_text_lower = if case_sensitive {
             search_text.to_string()
@@ -545,6 +593,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
             search_text_lower: &str,
             case_sensitive: bool,
             matches: &mut Vec<SearchMatch>,
+            documents: &std::rc::Rc<std::cell::RefCell<Vec<Option<StoredDocument>>>>,
         ) {
             // Check if this node has children
             let has_children = tree_store.iter_children(Some(iter)).is_some();
@@ -561,10 +610,11 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                         .value(iter, 1)
                         .get::<String>()
                         .unwrap_or_default();
-                    let full_value = tree_store
+                    let data_path = tree_store
                         .value(iter, 3)
                         .get::<String>()
                         .unwrap_or_default();
+                    let doc_id = tree_store.value(iter, 4).get::<i64>().unwrap_or(-1);
 
                     // Find all occurrences in the key
                     let key_occurrences = find_all_occurrences(&key, search_text, case_sensitive);
@@ -577,7 +627,16 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
                     // Find all occurrences in the value
                     // We need to format it the same way as we display it, so offsets match
-                    let value_to_search = format_value_from_string(&full_value, &value_preview);
+                    let value_to_search = {
+                        let docs = documents.borrow();
+                        let value = docs
+                            .get(doc_id as usize)
+                            .and_then(|doc| doc.as_ref())
+                            .and_then(|doc| doc.lookup_value(&data_path));
+                        value
+                            .map(format_value_literal)
+                            .unwrap_or_else(|| value_preview.clone())
+                    };
                     let value_occurrences =
                         find_all_occurrences(&value_to_search, search_text, case_sensitive);
                     for (_start, _end) in value_occurrences {
@@ -598,6 +657,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                             search_text_lower,
                             case_sensitive,
                             matches,
+                            documents,
                         );
                         if !tree_store.iter_next(&mut child_iter) {
                             break;
@@ -617,6 +677,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                     &search_text_lower,
                     case_sensitive,
                     &mut matches,
+                    &documents_for_search,
                 );
                 if !tree_store.iter_next(&mut root_iter) {
                     break;
@@ -656,12 +717,15 @@ fn build_ui(app: &Application, initial_files: &[String]) {
             Some(0) // No current selection, start from beginning
         };
 
-        *search_matches.borrow_mut() = matches;
-        *search_current_index.borrow_mut() = starting_index;
-    };
+            *search_matches.borrow_mut() = matches;
+            *search_current_index.borrow_mut() = starting_index;
+        }
+    });
 
     // Function to navigate to search result and highlight the occurrence
-    let navigate_to_match = |tree_view: &TreeView,
+    let navigate_to_match = std::rc::Rc::new({
+        let documents_for_navigation = documents.clone();
+        move |tree_view: &TreeView,
                              selection: &gtk::TreeSelection,
                              tree_store: &TreeStore,
                              value_text_buffer: &TextBuffer,
@@ -697,17 +761,25 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
                 // Get the iter for the selected path to get the value
                 if let Some(iter) = tree_store.iter(path) {
-                    let full_value = tree_store
+                    let data_path = tree_store
                         .value(&iter, 3)
                         .get::<String>()
                         .unwrap_or_default();
+                    let doc_id = tree_store.value(&iter, 4).get::<i64>().unwrap_or(-1);
 
                     // Format the JSON value nicely - must match the formatting used during search
                     let preview = tree_store
                         .value(&iter, 1)
                         .get::<String>()
                         .unwrap_or_default();
-                    let formatted_value = format_value_from_string(&full_value, &preview);
+                    let formatted_value = {
+                        let docs = documents_for_navigation.borrow();
+                        let value = docs
+                            .get(doc_id as usize)
+                            .and_then(|doc| doc.as_ref())
+                            .and_then(|doc| doc.lookup_value(&data_path));
+                        format_value_for_display(value, &preview)
+                    };
 
                     // Set the text in the buffer
                     value_text_buffer.set_text(&formatted_value);
@@ -809,7 +881,8 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                 }
             }
         }
-    };
+    }
+    });
 
     // Connect search entry changes
     let tree_store_for_search = tree_store.clone();
@@ -826,6 +899,8 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     let next_button_clone = next_button.clone();
 
     search_entry.connect_changed({
+        let perform_search = perform_search.clone();
+        let navigate_to_match = navigate_to_match.clone();
         let tree_store_clone = tree_store_for_search.clone();
         let tree_view_clone = tree_view_for_search.clone();
         let selection_clone = selection_for_search.clone();
@@ -857,7 +932,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                 .selected()
                 .and_then(|(_model, iter)| tree_store_clone.path(&iter));
 
-            perform_search(
+            (*perform_search)(
                 &tree_store_clone,
                 &search_text,
                 case_sensitive,
@@ -873,7 +948,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
             if has_matches {
                 let current_idx = search_current_index_clone2.borrow();
-                navigate_to_match(
+                (*navigate_to_match)(
                     &tree_view_clone,
                     &selection_clone,
                     &tree_store_clone,
@@ -903,6 +978,8 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     let next_button_for_case = next_button_clone.clone();
 
     case_sensitive_check.connect_toggled({
+        let perform_search = perform_search.clone();
+        let navigate_to_match = navigate_to_match.clone();
         let tree_store_clone = tree_store_for_case.clone();
         let tree_view_clone = tree_view_for_case.clone();
         let selection_clone = selection_for_case.clone();
@@ -931,7 +1008,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                 .selected()
                 .and_then(|(_model, iter)| tree_store_clone.path(&iter));
 
-            perform_search(
+            (*perform_search)(
                 &tree_store_clone,
                 &search_text,
                 case_sensitive,
@@ -947,7 +1024,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
 
             if has_matches {
                 let current_idx = search_current_index_clone2.borrow();
-                navigate_to_match(
+                (*navigate_to_match)(
                     &tree_view_clone,
                     &selection_clone,
                     &tree_store_clone,
@@ -974,6 +1051,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     let current_case_sensitive_for_prev = current_case_sensitive_clone.clone();
 
     prev_button.connect_clicked({
+        let navigate_to_match = navigate_to_match.clone();
         let tree_store_clone = tree_store_for_prev.clone();
         let tree_view_clone = tree_view_for_prev.clone();
         let selection_clone = selection_for_prev.clone();
@@ -995,7 +1073,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                 *current_idx = Some(new_idx);
                 let search_text = current_search_text_clone2.borrow().clone();
                 let case_sensitive = *current_case_sensitive_clone2.borrow();
-                navigate_to_match(
+                (*navigate_to_match)(
                     &tree_view_clone,
                     &selection_clone,
                     &tree_store_clone,
@@ -1022,6 +1100,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     let current_case_sensitive_for_next = current_case_sensitive_clone.clone();
 
     next_button.connect_clicked({
+        let navigate_to_match = navigate_to_match.clone();
         let tree_store_clone = tree_store_for_next.clone();
         let tree_view_clone = tree_view_for_next.clone();
         let selection_clone = selection_for_next.clone();
@@ -1043,7 +1122,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                 *current_idx = Some(new_idx);
                 let search_text = current_search_text_clone2.borrow().clone();
                 let case_sensitive = *current_case_sensitive_clone2.borrow();
-                navigate_to_match(
+                (*navigate_to_match)(
                     &tree_view_clone,
                     &selection_clone,
                     &tree_store_clone,
@@ -1069,6 +1148,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
     let current_search_text_for_enter = current_search_text_clone.clone();
     let current_case_sensitive_for_enter = current_case_sensitive_clone.clone();
     search_entry.connect_activate({
+        let navigate_to_match = navigate_to_match.clone();
         let tree_store_clone = tree_store_for_enter.clone();
         let tree_view_clone = tree_view_for_enter.clone();
         let selection_clone = selection_for_enter.clone();
@@ -1090,7 +1170,7 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                 *current_idx = Some(new_idx);
                 let search_text = current_search_text_clone2.borrow().clone();
                 let case_sensitive = *current_case_sensitive_clone2.borrow();
-                navigate_to_match(
+                (*navigate_to_match)(
                     &tree_view_clone,
                     &selection_clone,
                     &tree_store_clone,
@@ -1147,7 +1227,13 @@ fn build_ui(app: &Application, initial_files: &[String]) {
                 .and_then(|n| n.to_str())
                 .unwrap_or("Unknown")
                 .to_string();
-            load_json_content_from_file(path, Some(&name), &tree_store, &value_text_buffer);
+            load_json_content_from_file(
+                path,
+                Some(&name),
+                &tree_store,
+                &value_text_buffer,
+                &documents,
+            );
         }
     }
 }
@@ -1159,13 +1245,34 @@ fn load_parse_result(
     tree_store: &TreeStore,
     value_text_buffer: &TextBuffer,
     error_prefix: &str,
+    documents: &std::rc::Rc<std::cell::RefCell<Vec<Option<StoredDocument>>>>,
 ) {
     match result {
         Ok(ParseResult::JsonL(json_values)) => {
-            add_jsonl_to_tree(tree_store, &json_values, default_name, default_name);
+            let doc = StoredDocument::JsonL(JsonLDocument::new(json_values));
+            let doc_id = {
+                let mut docs = documents.borrow_mut();
+                let doc_id = docs.len() as i64;
+                docs.push(None);
+                doc_id
+            };
+            if let StoredDocument::JsonL(doc) = &doc {
+                add_jsonl_to_tree(tree_store, doc.values(), default_name, default_name, doc_id);
+            }
+            documents.borrow_mut()[doc_id as usize] = Some(doc);
         }
         Ok(ParseResult::Single(value)) => {
-            add_single_value_to_tree(tree_store, &value, default_name);
+            let doc = StoredDocument::Single(value);
+            let doc_id = {
+                let mut docs = documents.borrow_mut();
+                let doc_id = docs.len() as i64;
+                docs.push(None);
+                doc_id
+            };
+            if let StoredDocument::Single(value) = &doc {
+                add_single_value_to_tree(tree_store, value, default_name, doc_id);
+            }
+            documents.borrow_mut()[doc_id as usize] = Some(doc);
         }
         Err(e) => {
             value_text_buffer.set_text(&format!("{}: {}", error_prefix, e));
@@ -1178,6 +1285,7 @@ fn load_json_content_from_file(
     name: Option<&str>,
     tree_store: &TreeStore,
     value_text_buffer: &TextBuffer,
+    documents: &std::rc::Rc<std::cell::RefCell<Vec<Option<StoredDocument>>>>,
 ) {
     let display_name = name.unwrap_or("File");
     let result = parse_file(path);
@@ -1187,6 +1295,7 @@ fn load_json_content_from_file(
         tree_store,
         value_text_buffer,
         "Error parsing file",
+        documents,
     );
 }
 
@@ -1195,6 +1304,7 @@ fn load_json_content(
     name: Option<&str>,
     tree_store: &TreeStore,
     value_text_buffer: &TextBuffer,
+    documents: &std::rc::Rc<std::cell::RefCell<Vec<Option<StoredDocument>>>>,
 ) {
     let display_name = name.unwrap_or("Content");
     let result = parse_text_content(content);
@@ -1204,5 +1314,6 @@ fn load_json_content(
         tree_store,
         value_text_buffer,
         "Error parsing content",
+        documents,
     );
 }

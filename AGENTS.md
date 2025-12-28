@@ -23,3 +23,5 @@ Prompts:
 ## General Directions
 
 Before committing, if the user provides general directions that are not specific to the particular task, update AGENTS.md with those directions. This ensures that important guidelines and preferences are preserved for future reference.
+
+- Do not use unsafe features like raw pointers.

@@ -50,26 +50,11 @@ pub fn format_value_literal(value: &Value) -> String {
     }
 }
 
-/// Formats a JSON value from a string representation.
-/// Attempts to parse the string as JSON and format it, falling back to the original string
-/// or preview if parsing fails.
-///
-/// # Arguments
-///
-/// * `full_value` - The JSON string representation
-/// * `preview_fallback` - Fallback string to use if full_value is empty
-///
-/// # Returns
-///
-/// Formatted string ready for display
-pub fn format_value_from_string(full_value: &str, preview_fallback: &str) -> String {
-    if !full_value.is_empty() {
-        match serde_json::from_str::<Value>(full_value) {
-            Ok(v) => format_value_literal(&v),
-            Err(_) => full_value.to_string(),
-        }
-    } else {
-        preview_fallback.to_string()
+/// Formats a JSON value for display, falling back to the preview text if missing.
+pub fn format_value_for_display(value: Option<&Value>, preview_fallback: &str) -> String {
+    match value {
+        Some(value) => format_value_literal(value),
+        None => preview_fallback.to_string(),
     }
 }
 
@@ -151,23 +136,16 @@ mod tests {
     }
 
     #[test]
-    fn test_format_value_from_string_valid_json() {
-        let json_str = r#"{"name": "test", "value": 42}"#;
-        let result = format_value_from_string(json_str, "fallback");
+    fn test_format_value_for_display_value() {
+        let value = serde_json::json!({"name": "test", "value": 42});
+        let result = format_value_for_display(Some(&value), "fallback");
         assert!(result.contains("test"));
         assert!(result.contains("42"));
     }
 
     #[test]
-    fn test_format_value_from_string_empty() {
-        let result = format_value_from_string("", "fallback");
+    fn test_format_value_for_display_fallback() {
+        let result = format_value_for_display(None, "fallback");
         assert_eq!(result, "fallback");
-    }
-
-    #[test]
-    fn test_format_value_from_string_invalid_json() {
-        let invalid = "not valid json";
-        let result = format_value_from_string(invalid, "fallback");
-        assert_eq!(result, invalid);
     }
 }
